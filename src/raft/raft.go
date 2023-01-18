@@ -21,7 +21,7 @@ import (
 	//	"bytes"
 	"sync"
 	"sync/atomic"
-
+	"time"
 	//	"6.824/labgob"
 	"6.824/labrpc"
 )
@@ -54,6 +54,7 @@ type ApplyMsg struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
+
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
@@ -64,6 +65,21 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	//** Persistent States
+	currentTerm int
+	votedFor string
+	logs []string
+
+	//** Volatile States on All Servers
+
+	//index of highest log entry known to be committed 
+	commitIndex int
+	//index of highest log entry applied to state machine
+	lastApplied int
+
+	//** Volatile state on leaders:
+	nextIndex []int
+	matchIndex []int
 }
 
 // return currentTerm and whether this server
@@ -143,6 +159,11 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term int
+	CandidateId string
+	LastLogIndex int
+	LastLogTerm int
+
 }
 
 //
@@ -151,6 +172,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term int
+	VoteGranted bool
 }
 
 //
@@ -193,8 +216,17 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
+//********************************************************************
+type AppendEntries struct{
+	Term int
+	LeaderId string
+	PrevLogIndex int
+	Entries []string
+	LeaderCommit int
+}
 
 
+//***********************************************************
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -245,11 +277,19 @@ func (rf *Raft) killed() bool {
 // heartsbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-
+		time.Sleep(120 * time.Millisecond)
+		term, isleader := rf.GetState()
+		if(isleader) {
+			args := AppendEntries{Term: term, LeaderId: string(rf.me), PrevLogIndex: len(rf.logs), Entries: []string{}, LeaderCommit: rf.commitIndex}
+			for server, _ := range(rf.peers) {
+				reply := *ReplyAppendEntries{}
+				ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+			}
+		}
+		
 	}
 }
 

@@ -6,17 +6,33 @@ package main
 // go run mrsequential.go wc.so pg*.txt
 //
 
-import "fmt"
-import "6.824/mr"
-import "plugin"
-import "os"
-import "log"
-import "io/ioutil"
-import "sort"
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"plugin"
+	"sort"
+
+	"6.824/mr"
+)
 
 // for sorting by key.
 type ByKey []mr.KeyValue
 
+/*
+class ByKey{
+	bool Less(int i, int j)
+	{
+		ByKey a = this;
+
+
+	}
+}
+
+ByKey a;
+bool c = a.Less(i, j);
+*/
 // for sorting by key.
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
@@ -35,7 +51,10 @@ func main() {
 	// pass it to Map,
 	// accumulate the intermediate Map output.
 	//
-	intermediate := []mr.KeyValue{}
+	var intermediate []mr.KeyValue
+
+	//_, filename := range os.Args[2:]
+	//fmt.Println(os.Getuid())
 	for _, filename := range os.Args[2:] {
 		file, err := os.Open(filename)
 		if err != nil {
@@ -47,7 +66,13 @@ func main() {
 		}
 		file.Close()
 		kva := mapf(filename, string(content))
-		intermediate = append(intermediate, kva...)
+		// kva" a 1 b 1 a 1
+
+		for _, myI := range kva[:] {
+			intermediate = append(intermediate, myI)
+		}
+		//intermediate = append(intermediate, kva...)
+
 	}
 
 	//
@@ -68,6 +93,7 @@ func main() {
 	i := 0
 	for i < len(intermediate) {
 		j := i + 1
+
 		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
 			j++
 		}
@@ -86,10 +112,8 @@ func main() {
 	ofile.Close()
 }
 
-//
 // load the application Map and Reduce functions
 // from a plugin file, e.g. ../mrapps/wc.so
-//
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {
 	p, err := plugin.Open(filename)
 	if err != nil {
