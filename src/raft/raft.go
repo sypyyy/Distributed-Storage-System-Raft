@@ -205,6 +205,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		if(rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
 			rf.votedFor = args.CandidateId
+			rf.currentTerm = args.Term
 			reply.VoteGranted = true
 		} else {
 			//fmt.Println(rf.me, "refuse vote ", args.CandidateId, "votedFor", rf.votedFor)
@@ -271,30 +272,33 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	} else {
 		rf.currentTerm = args.Term
+		rf.votedFor = args.LeaderId
 	}
+	
+	//fmt.Println(args.PrevLogIndex,args.PrevLogTerm)
+	
 	//Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
-	/**
-
-	entry, ok := rf.logs[args.PrevLogIndex]
-	if(ok && entry.term != args.PrevLogTerm) || !ok {
-		reply.Success = false
-		reply.Term = args.Term
-		return
+	if(args.PrevLogIndex != 0) {
+		entry, ok := rf.logs[args.PrevLogIndex]
+		
+		if(ok && entry.term != args.PrevLogTerm) || !ok {
+			reply.Success = false
+			return
+		}
 	}
-	*/
 	if(args.LeaderCommit > rf.lastApplied) {
 		rf.commitIndex = args.LeaderCommit
 		rf.lastApplied = rf.commitIndex
 		rf.ApplyCh <- ApplyMsg{Command: rf.logs[rf.commitIndex].entry, CommandValid: true, CommandIndex : rf.commitIndex}
 	}
 	if(len(args.Entries) == 0) {
-		//fmt.Println(rf.me,"leader heart")
+		
 		reply.Success = true
 		reply.Term = args.Term
 		rf.currentTerm = args.Term
 		rf.isLeader = args.LeaderId == rf.me
 		rf.needNewLeader = false
-		rf.votedFor = -1
+		rf.votedFor = args.LeaderId
 		return
 	}
 	if(len(args.Entries) != 0) {
@@ -432,6 +436,7 @@ func (rf *Raft) ticker() {
 		//fmt.Println(rf.me,rf.needNewLeader)
 		if(rf.needNewLeader) {
 			rf.currentTerm = term + 1
+			rf.votedFor = -1
 			go rf.startElection(term + 1)
 		}
 		rf.mu.Unlock()
@@ -456,6 +461,8 @@ func (rf *Raft) startElection(term int) {
 			ok := rf.peers[serverIndex].Call("Raft.RequestVote", args, reply)
 			if !ok {
 				//fmt.Println("error when sending request")
+				done += 1
+				cond.Broadcast()
 			} else {
 				cond.L.Lock()
 				done += 1
@@ -518,6 +525,7 @@ func (rf *Raft) sendHeartBeat() {
 			for server, _ := range rf.peers {
 				rf.mu.Lock()
 					args := &AppendEntriesArgs{Term: term, LeaderId: rf.me, PrevLogIndex: rf.logLen, PrevLogTerm: rf.logs[rf.logLen].term, Entries: []interface{}{}, LeaderCommit: rf.commitIndex}
+					//fmt.Println(rf.logs[rf.logLen].term,"dsfds",rf.logs[rf.logLen])
 				rf.mu.Unlock()
 				go func (serverIndex int){
 					reply := &AppendEntriesReply{}
@@ -582,7 +590,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 func getRandomTimeOut() int {
 	rand.Seed(time.Now().UnixNano())
-	min := 400
-	max := 800
+	min := 300
+	max := 600
 	return rand.Intn(max - min + 1) + min
 }

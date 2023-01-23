@@ -95,36 +95,37 @@ func TestReElection2A(t *testing.T) {
 }
 
 func TestManyElections2A(t *testing.T) {
-	servers := 7
-	cfg := make_config(t, servers, false, false)
-	defer cfg.cleanup()
-
-	cfg.begin("Test (2A): multiple elections")
-
-	cfg.checkOneLeader()
-
-	iters := 10
-	for ii := 1; ii < iters; ii++ {
-		// disconnect three nodes
-		i1 := rand.Int() % servers
-		i2 := rand.Int() % servers
-		i3 := rand.Int() % servers
-		cfg.disconnect(i1)
-		cfg.disconnect(i2)
-		cfg.disconnect(i3)
-
-		// either the current leader should still be alive,
-		// or the remaining four should elect a new one.
+	for {
+		servers := 7
+		cfg := make_config(t, servers, false, false)
+		defer cfg.cleanup()
+		cfg.begin("Test (2A): multiple elections")
 		cfg.checkOneLeader()
+		iters := 10
+		for ii := 1; ii < iters; ii++ {
+			// disconnect three nodes
+			i1 := rand.Int() % servers
+			i2 := rand.Int() % servers
+			i3 := rand.Int() % servers
+			cfg.disconnect(i1)
+			cfg.disconnect(i2)
+			cfg.disconnect(i3)
 
-		cfg.connect(i1)
-		cfg.connect(i2)
-		cfg.connect(i3)
+			// either the current leader should still be alive,
+			// or the remaining four should elect a new one.
+			cfg.checkOneLeader()
+			
+
+			cfg.connect(i1)
+			cfg.connect(i2)
+			cfg.connect(i3)
+		}
+
+		cfg.checkOneLeader()
+		
+
+		cfg.end()
 	}
-
-	cfg.checkOneLeader()
-
-	cfg.end()
 }
 
 func TestBasicAgree2B(t *testing.T) {
