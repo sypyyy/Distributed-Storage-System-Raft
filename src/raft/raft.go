@@ -83,6 +83,7 @@ type Raft struct {
 	leaderIndex int
 	isLeader bool
 	needNewLeader bool
+	stepDown bool
 
 	//** Volatile States on All Servers
 
@@ -276,11 +277,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	
 	//fmt.Println(args.PrevLogIndex,args.PrevLogTerm)
-	
+	reply.Success = true
 	//Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if(args.PrevLogIndex != 0) {
 		entry, ok := rf.logs[args.PrevLogIndex]
-		
 		if(ok && entry.term != args.PrevLogTerm) || !ok {
 			reply.Success = false
 			return
@@ -292,8 +292,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.ApplyCh <- ApplyMsg{Command: rf.logs[rf.commitIndex].entry, CommandValid: true, CommandIndex : rf.commitIndex}
 	}
 	if(len(args.Entries) == 0) {
-		
-		reply.Success = true
 		reply.Term = args.Term
 		rf.currentTerm = args.Term
 		rf.isLeader = args.LeaderId == rf.me
@@ -302,7 +300,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	if(len(args.Entries) != 0) {
-		reply.Success = true
 		reply.Term = args.Term
 		for _, entry := range args.Entries {
 			rf.logLen += 1
@@ -349,8 +346,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 //******************************************************************
 //Send Log
-func (rf *Raft) sendLog(command interface{}) {
-	
+func (rf *Raft) sendLog(command interface{}) {	
 	mu := sync.Mutex{}
 	agree := 1
 	rf.mu.Lock()
@@ -368,24 +364,20 @@ func (rf *Raft) sendLog(command interface{}) {
 		rf.mu.Unlock()
 		go func (serverIndex int){
 			reply := &AppendEntriesReply{}
-			
 			ok := rf.peers[serverIndex].Call("Raft.AppendEntries", args, reply)
 			if !ok {
-				
 				//fmt.Println("error when sending heartBeat")
 			} else {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				if !reply.Success {
-					
-					rf.currentTerm = reply.Term
-					rf.leaderIndex = -1
-					rf.isLeader = false
+					if(reply.Term > rf.currentTerm) {
+						rf.stepDownFromLeader(reply.Term)
+					}
 				} else {
 					mu.Lock()
 					defer mu.Unlock()
 					agree += 1
-					
 					if(agree >= (len(rf.peers) / 2 + 1)) {
 						agree = 0
 						rf.commitIndex += len(args.Entries)
@@ -397,6 +389,14 @@ func (rf *Raft) sendLog(command interface{}) {
 		}(server)
 	}
 }
+// Steps down from being a leader. must be called with rf.mu held !!!!!!!!
+func (rf *Raft) stepDownFromLeader(term int) {
+	rf.currentTerm = term
+	rf.leaderIndex = -1
+	rf.isLeader = false
+	rf.stepDown = true
+}
+
 //******************************************************************
 //
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -461,7 +461,9 @@ func (rf *Raft) startElection(term int) {
 			ok := rf.peers[serverIndex].Call("Raft.RequestVote", args, reply)
 			if !ok {
 				//fmt.Println("error when sending request")
+				cond.L.Lock()
 				done += 1
+				cond.L.Unlock()
 				cond.Broadcast()
 			} else {
 				cond.L.Lock()
@@ -470,7 +472,6 @@ func (rf *Raft) startElection(term int) {
 					rf.mu.Lock()
 					rf.currentTerm = reply.Term
 					rf.mu.Unlock()
-					return
 				}
 				if !reply.VoteGranted {
 					//fmt.Println("vote denied")
@@ -511,44 +512,51 @@ func (rf *Raft) startElection(term int) {
 	cond.L.Unlock()
 }
 
+func (rf *Raft) appendOne(server int, entries interface{}) {
+	reply := &AppendEntriesReply{}
+	rf.mu.Lock()
+	args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.logLen, PrevLogTerm: rf.logs[rf.logLen].term, Entries: []interface{}{}, LeaderCommit: rf.commitIndex}
+	rf.mu.Unlock()
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if !ok {
+		//fmt.Println("error when sending heartBeat")
+	} else {
+		if !reply.Success {
+			//fmt.Println("heartbeat term old")
+			rf.mu.Lock()
+			if(reply.Term > rf.currentTerm) {
+				rf.stepDownFromLeader(reply.Term)
+			} else {
+				rf.matchIndex[server] -= 1
+			}
+			rf.mu.Unlock()
+		}
+	}
+}
+
+
 func (rf *Raft) sendHeartBeat() {
-	suicide := false
+	rf.mu.Lock()
+	rf.stepDown = false
+	rf.mu.Unlock()
 	mu := sync.Mutex{}
 	for rf.killed() == false {
+		rf.mu.Lock()
+		stepDown := rf.stepDown
+		rf.mu.Unlock()
 		mu.Lock()
-		if(suicide) {
+		if(stepDown) {
+			mu.Unlock()
 			return
 		}
 		mu.Unlock()
-		term, isleader := rf.GetState()
+		_, isleader := rf.GetState()
 		if(isleader) {
 			for server, _ := range rf.peers {
 				rf.mu.Lock()
-					args := &AppendEntriesArgs{Term: term, LeaderId: rf.me, PrevLogIndex: rf.logLen, PrevLogTerm: rf.logs[rf.logLen].term, Entries: []interface{}{}, LeaderCommit: rf.commitIndex}
 					//fmt.Println(rf.logs[rf.logLen].term,"dsfds",rf.logs[rf.logLen])
 				rf.mu.Unlock()
-				go func (serverIndex int){
-					reply := &AppendEntriesReply{}
-					ok := rf.peers[serverIndex].Call("Raft.AppendEntries", args, reply)
-					if !ok {
-						//fmt.Println("error when sending heartBeat")
-					} else {
-						if !reply.Success {
-							//fmt.Println("heartbeat term old")
-							
-							rf.mu.Lock()
-							if(reply.Term > rf.currentTerm) {
-								rf.currentTerm = reply.Term
-								rf.leaderIndex = -1
-								rf.isLeader = false
-								mu.Lock()
-								suicide = true
-								mu.Unlock()
-							}
-							rf.mu.Unlock()
-						}
-					}
-				}(server)
+				go rf.appendOne (server, []interface{}{})
 			}
 		}
 		time.Sleep(120 * time.Millisecond)
@@ -581,6 +589,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.isLeader = false
 	rf.ApplyCh = applyCh
+	rf.nextIndex = make(map[int]int)
+	rf.matchIndex = make(map[int]int)
+	for server,_ := range rf.peers {
+		rf.nextIndex[server] = rf.logLen + 1
+		rf.matchIndex[server] = 0
+	} 
+	
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
